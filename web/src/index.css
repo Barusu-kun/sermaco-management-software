@@ -1,0 +1,63 @@
+@import 'tailwindcss';
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* Ajustements FullCalendar */
+.fc .fc-toolbar-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.fc .fc-button-primary {
+  background-color: #2563eb;
+  border-color: #2563eb;
+}
+.fc .fc-button-primary:hover {
+  background-color: #1d4ed8;
+  border-color: #1d4ed8;
+}
+.fc-event {
+  cursor: pointer;
+}
+
+/* En-tête de colonne : jour + nombre de services */
+.fc-dh-label {
+  font-weight: 600;
+}
+.fc-dh-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: #2563eb;
+  margin-top: 2px;
+}
+
+/* Statut des services (le fond reste la couleur du client) */
+.fc-ev-EN_COURS {
+  box-shadow: inset 4px 0 0 #10b981;
+  font-weight: 600;
+}
+.fc-ev-TERMINE {
+  opacity: 0.5;
+}
+.fc-ev-TERMINE .fc-event-title {
+  text-decoration: line-through;
+}
+
+/* Meilleure lisibilité des événements */
+.fc-timegrid-event .fc-event-main {
+  padding: 2px 4px;
+}
+.fc-event-title {
+  white-space: normal;
+  line-height: 1.15;
+}

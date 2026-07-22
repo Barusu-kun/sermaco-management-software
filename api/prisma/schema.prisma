@@ -1,0 +1,105 @@
+// Prisma schema - Système de Gestion de Planning et Transport v2.1
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Personnel {
+  id        String   @id @default(uuid())
+  codeId    String   @unique @map("code_id")
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  role      Role     @default(CHAUFFEUR)
+  phone     String?
+  pinCode   String?  @map("pin_code")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  services  Service[]
+  auditLogs AuditLog[] @relation("PerformedBy")
+
+  @@index([role])
+  @@index([isActive])
+  @@index([codeId])
+  @@map("personnel")
+}
+
+model Client {
+  id             String   @id @default(uuid())
+  name           String
+  billingAddress String?  @map("billing_address")
+  contactEmail   String?  @map("contact_email")
+  contactPhone   String?  @map("contact_phone")
+  colorCode      String   @default("#3B82F6") @map("color_code")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  services Service[]
+
+  @@map("clients")
+}
+
+model Service {
+  id                String        @id @default(uuid())
+  serviceCode       String        @unique @map("service_code")
+  personnelId       String        @map("personnel_id")
+  clientId          String?       @map("client_id")
+  title             String?
+  pickupLocation    String?       @map("pickup_location")
+  dropoffLocation   String?       @map("dropoff_location")
+  stops             String[]      @default([])
+  startTime         DateTime      @map("start_time") @db.Timestamptz(6)
+  endTime           DateTime?     @map("end_time") @db.Timestamptz(6)
+  notes             String?
+  price             Decimal?      @db.Decimal(12, 2)
+  status            ServiceStatus @default(PLANIFIE)
+  completedByDriver Boolean       @default(false) @map("completed_by_driver")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  chauffeur Personnel @relation(fields: [personnelId], references: [id], onDelete: Restrict)
+  client    Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([personnelId])
+  @@index([clientId])
+  @@index([startTime])
+  @@index([status])
+  @@map("services")
+}
+
+model AuditLog {
+  id            String   @id @default(uuid())
+  tableName     String   @map("table_name")
+  recordId      String   @map("record_id")
+  action        String
+  oldData       Json?    @map("old_data")
+  newData       Json?    @map("new_data")
+  performedById String?  @map("performed_by")
+  performedAt   DateTime @default(now()) @map("performed_at") @db.Timestamptz(6)
+
+  performedBy Personnel? @relation("PerformedBy", fields: [performedById], references: [id])
+
+  @@index([tableName])
+  @@index([recordId])
+  @@index([performedAt])
+  @@map("audit_log")
+}
+
+enum Role {
+  DISPATCH
+  CHAUFFEUR
+}
+
+enum ServiceStatus {
+  PLANIFIE
+  EN_COURS
+  TERMINE
+  ANNULE
+}

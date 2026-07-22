@@ -1,0 +1,14 @@
+{
+  "name": "planning-transport-mock",
+  "version": "2.1.0",
+  "description": "Serveur API factice (in-memory) pour tester le frontend sans base de données ni serveur Linux",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "xlsx": "^0.18.5"
+  }
+}

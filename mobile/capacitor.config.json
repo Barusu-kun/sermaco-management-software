@@ -1,0 +1,12 @@
+{
+  "appId": "fr.planningtransport.chauffeur",
+  "appName": "PT Chauffeur",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

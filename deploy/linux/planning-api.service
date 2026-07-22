@@ -1,0 +1,22 @@
+# Modèle de service systemd (référence).
+# Le script install-server.sh en génère une version avec les chemins réels.
+# Copie manuelle : adaptez WorkingDirectory / User puis :
+#   sudo cp planning-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now planning-api
+
+[Unit]
+Description=Planning Transport API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=planning
+WorkingDirectory=/opt/planning-transport/api
+EnvironmentFile=/opt/planning-transport/api/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node src/app.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; connect-src *;" />
+    <title>Configuration — Planning Transport</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0f172a;
+        color: #e2e8f0;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      }
+      .card { width: 100%; max-width: 420px; padding: 32px; }
+      .logo {
+        width: 56px; height: 56px; border-radius: 16px; background: #2563eb;
+        display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;
+        font-size: 28px;
+      }
+      h1 { font-size: 22px; text-align: center; margin: 0 0 4px; }
+      p.sub { text-align: center; color: #94a3b8; margin: 0 0 28px; }
+      label { display: block; font-size: 13px; color: #cbd5e1; margin-bottom: 6px; }
+      input {
+        width: 100%; padding: 12px 14px; border-radius: 8px; border: 1px solid #334155;
+        background: #1e293b; color: #fff; font-size: 15px; outline: none;
+      }
+      input:focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.4); }
+      .hint { font-size: 12px; color: #64748b; margin-top: 6px; }
+      .row { display: flex; gap: 10px; margin-top: 20px; }
+      button {
+        flex: 1; padding: 12px; border-radius: 8px; border: none; font-size: 15px;
+        font-weight: 600; cursor: pointer;
+      }
+      .primary { background: #2563eb; color: #fff; }
+      .primary:hover { background: #1d4ed8; }
+      .ghost { background: #1e293b; color: #cbd5e1; border: 1px solid #334155; }
+      .ghost:hover { background: #334155; }
+      .status { margin-top: 16px; font-size: 13px; text-align: center; min-height: 18px; }
+      .ok { color: #4ade80; }
+      .err { color: #f87171; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="logo">🚐</div>
+      <h1>Planning Transport</h1>
+      <p class="sub">Configuration du serveur</p>
+
+      <label for="url">URL de l'API du serveur</label>
+      <input id="url" type="text" placeholder="http://192.168.1.50:3000/api/v1" autocomplete="off" />
+      <p class="hint">Adresse de votre serveur Linux, incluant <code>/api/v1</code>.</p>
+
+      <div class="status" id="status"></div>
+
+      <div class="row">
+        <button class="ghost" id="test">Tester</button>
+        <button class="primary" id="save">Enregistrer & continuer</button>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      // Pré-remplir avec la valeur existante si présente
+      $('url').value = window.desktopConfig?.serverUrl || '';
+
+      function normalize(v) {
+        return String(v || '').trim().replace(/\/+$/, '');
+      }
+
+      function healthUrl(apiUrl) {
+        try {
+          const u = new URL(apiUrl);
+          return `${u.protocol}//${u.host}/health`;
+        } catch {
+          return null;
+        }
+      }
+
+      $('test').addEventListener('click', async () => {
+        const url = normalize($('url').value);
+        const hu = healthUrl(url);
+        if (!hu) {
+          $('status').className = 'status err';
+          $('status').textContent = 'URL invalide.';
+          return;
+        }
+        $('status').className = 'status';
+        $('status').textContent = 'Test en cours…';
+        try {
+          await fetch(hu, { mode: 'no-cors' });
+          $('status').className = 'status ok';
+          $('status').textContent = '✓ Serveur joignable.';
+        } catch {
+          $('status').className = 'status err';
+          $('status').textContent = '✗ Serveur injoignable à cette adresse.';
+        }
+      });
+
+      $('save').addEventListener('click', async () => {
+        const url = normalize($('url').value);
+        if (!url) {
+          $('status').className = 'status err';
+          $('status').textContent = "Veuillez saisir l'URL du serveur.";
+          return;
+        }
+        await window.desktop.saveServerUrl(url);
+      });
+
+      $('url').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') $('save').click();
+      });
+    </script>
+  </body>
+</html>

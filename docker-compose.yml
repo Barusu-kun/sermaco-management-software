@@ -1,0 +1,79 @@
+services:
+  # ── Base de données ──
+  postgres:
+    image: postgres:15-alpine
+    container_name: planning-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-planning_transport}
+      POSTGRES_USER: ${DB_USER:-app_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change_me_secure_password}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-app_user} -d ${DB_NAME:-planning_transport}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - planning-network
+
+  # ── Backend API ──
+  api:
+    build:
+      context: ./api
+    container_name: planning-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${DB_USER:-app_user}:${DB_PASSWORD:-change_me_secure_password}@postgres:5432/${DB_NAME:-planning_transport}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-change_me_super_secret_jwt_key_min_32_chars_long}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://localhost:5173,http://localhost:8080}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - '3000:3000'
+    networks:
+      - planning-network
+
+  # ── Frontend PC (Nginx) ──
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_URL: /api/v1
+    container_name: planning-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - '8080:80'
+    networks:
+      - planning-network
+
+  # ── Frontend Mobile PWA (Nginx) ──
+  mobile:
+    build:
+      context: ./mobile
+      args:
+        VITE_API_URL: /api/v1
+    container_name: planning-mobile
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - '8081:80'
+    networks:
+      - planning-network
+
+volumes:
+  postgres_data:
+
+networks:
+  planning-network:
+    driver: bridge
