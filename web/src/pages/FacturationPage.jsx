@@ -38,7 +38,7 @@ function VesselSearch({ onSelect }) {
         <Ship className="w-4 h-4 text-slate-400 shrink-0" />
         <input
           value={input}
-          onChange={(e) => { setInput(e.target.value.toUpperCase()); setOpen(true); }}
+          onChange={(e) => { const v = e.target.value.toUpperCase(); setInput(v); onSelect(v); setOpen(true); }}
           onFocus={() => setOpen(true)}
           placeholder="Rechercher un navire (ex: GNV SEALAND)…"
           className="w-full outline-none text-sm"
