@@ -74,6 +74,8 @@ let services = [
   mkService('s8', 'p2', 'c5', 'Relève équipage', 'Moll 19B, Port de Barcelona', 'Aeroport BCN T1', '2026-07-21T20:00:00+02:00', '2026-07-21T21:30:00+02:00', 'Escale GNV du 21/07', null),
   mkService('s9', 'p6', 'c5', 'Avitaillement', 'Moll 19B, Port de Barcelona', 'Zona Franca', '2026-07-21T21:15:00+02:00', '2026-07-21T22:15:00+02:00', null, null),
   mkService('s10', 'p3', 'c5', 'Control aduana', 'Moll 20A, Port de Barcelona', 'Duana del Port', '2026-07-22T19:30:00+02:00', '2026-07-22T20:30:00+02:00', null, null),
+  // Prestation "hors escale" : équipage récupéré le matin à l'aéroport, bateau pas encore arrivé
+  mkService('s11', 'p4', 'c5', 'Prise en charge équipage aéroport', 'Aeroport BCN T1', 'Terminal Port, Moll 19B', '2026-07-21T09:00:00+02:00', '2026-07-21T10:00:00+02:00', 'Bateau pas encore à quai', null),
 ];
 
 // Statuts variés pour illustrer les statistiques opérationnelles
@@ -83,7 +85,7 @@ services[6].status = 'ANNULE'; // s7
 
 let seqPersonnel = 9;
 let seqClient = 5;
-let seqService = 10;
+let seqService = 11;
 
 function mkService(id, personnelId, clientId, title, pickup, dropoff, start, end, notes, price) {
   return {
@@ -95,6 +97,7 @@ function mkService(id, personnelId, clientId, title, pickup, dropoff, start, end
     pickupLocation: pickup,
     dropoffLocation: dropoff,
     stops: [],
+    groupId: null,
     startTime: start,
     endTime: end,
     notes,
@@ -341,6 +344,7 @@ app.post('/api/v1/services', (req, res) => {
     pickupLocation: normalized.pickupLocation?.trim() || null,
     dropoffLocation: normalized.dropoffLocation?.trim() || null,
     stops: normalizeStops(normalized.stops),
+    groupId: null,
     startTime,
     endTime: end,
     notes: normalized.notes?.trim() || null,
@@ -563,8 +567,31 @@ app.patch('/api/v1/driver/services/:id/complete', (req, res) => {
 const fmtDate = (iso) => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(iso));
 const fmtTime = (iso) => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
 
+// Groupes de services (une escale = un groupe), ID lisible « 26BCN001 »
+let billingGroups = {}; // key -> { id, vesselName, eta, etd, muelle, tipo }
+let groupSeq = 0;
+const escalaKey = (vessel, eta) => `${String(vessel).toUpperCase()}|${new Date(eta).toISOString()}`;
+const existingGroupId = (vessel, eta) => billingGroups[escalaKey(vessel, eta)]?.id || null;
+function materializeGroupId(vessel, pc) {
+  const key = escalaKey(vessel, pc.eta);
+  if (billingGroups[key]) return billingGroups[key].id;
+  const yy = String(new Date(pc.eta).getFullYear()).slice(2);
+  groupSeq += 1;
+  const id = `${yy}BCN${String(groupSeq).padStart(3, '0')}`;
+  billingGroups[key] = {
+    id,
+    vesselName: vessel,
+    eta: new Date(pc.eta).toISOString(),
+    etd: pc.etd ? new Date(pc.etd).toISOString() : null,
+    muelle: pc.muelle || null,
+    tipo: pc.tipo || null,
+  };
+  return id;
+}
+
 function serviceBrief(s) {
   const ch = findChauffeur(s.personnelId);
+  const cl = s.clientId ? findClient(s.clientId) : null;
   return {
     id: s.id,
     serviceCode: s.serviceCode,
@@ -574,37 +601,56 @@ function serviceBrief(s) {
     endTime: s.endTime,
     driverCode: ch?.codeId || '',
     driverName: ch ? `${ch.firstName} ${ch.lastName}` : '',
+    clientName: cl?.name || 'Particulier',
     pickup: s.pickupLocation,
     dropoff: s.dropoffLocation,
     stops: s.stops || [],
+    groupId: s.groupId || null,
   };
 }
 
-async function computeFacturation(client, from, to) {
-  const escalas = await portic.fetchEscalas(client.name, client.imo);
+const sameVessel = (a, b) => String(a || '').toUpperCase() === String(b || '').toUpperCase();
+
+async function computeFacturation(vesselName, from, to) {
+  const escalas = await portic.fetchEscalas(vesselName, null);
   const fromD = from ? new Date(`${from}T00:00:00`) : null;
   const toD = to ? new Date(`${to}T23:59:59`) : null;
-  const inRange = escalas.filter(
-    (e) => e.eta && (!fromD || (e.etd || e.eta) >= fromD) && (!toD || e.eta <= toD)
+  const inRange = escalas
+    .filter((e) => e.eta && (!fromD || (e.etd || e.eta) >= fromD) && (!toD || e.eta <= toD))
+    .sort((a, b) => a.eta - b.eta); // ascendant pour une numérotation stable
+
+  // Prestations rattachables au navire : client = navire, OU rattachées manuellement à un de ses groupes
+  const vesselGroupIds = new Set(
+    Object.values(billingGroups).filter((g) => sameVessel(g.vesselName, vesselName)).map((g) => g.id)
   );
-  const svc = services.filter((s) => s.clientId === client.id && s.status !== 'ANNULE');
+  const belongsToVessel = (s) => {
+    if (s.status === 'ANNULE') return false;
+    const cl = s.clientId ? findClient(s.clientId) : null;
+    if (cl && sameVessel(cl.name, vesselName)) return true;
+    if (s.groupId && vesselGroupIds.has(s.groupId)) return true;
+    return false;
+  };
+  const svc = services.filter(belongsToVessel);
   const matched = new Set();
 
   const groups = inRange.map((e) => {
-    const list = svc.filter((s) => {
-      const t = new Date(s.startTime);
-      return e.eta && e.etd && t >= e.eta && t <= e.etd;
-    });
+    const auto = svc.filter((s) => !s.groupId && e.etd && new Date(s.startTime) >= e.eta && new Date(s.startTime) <= e.etd);
+    let gid = existingGroupId(vesselName, e.eta);
+    const manual = gid ? svc.filter((s) => s.groupId === gid) : [];
+    const list = [...new Map([...auto, ...manual].map((s) => [s.id, s])).values()];
+    if (list.length && !gid) gid = materializeGroupId(vesselName, e);
     list.forEach((s) => matched.add(s.id));
     return {
+      groupId: gid,
       portCall: { ...e, eta: e.eta?.toISOString(), etd: e.etd?.toISOString() },
       services: list.map(serviceBrief),
     };
   });
 
+  // Prestations « hors escale » : rattachables au navire mais dans aucune fenêtre et non épinglées
   const unmatched = svc
     .filter((s) => {
-      if (matched.has(s.id)) return false;
+      if (matched.has(s.id) || s.groupId) return false;
       const t = new Date(s.startTime);
       if (fromD && t < fromD) return false;
       if (toD && t > toD) return false;
@@ -614,8 +660,8 @@ async function computeFacturation(client, from, to) {
 
   return {
     vessel: {
-      name: client.name,
-      imo: client.imo || escalas[0]?.imo || null,
+      name: vesselName,
+      imo: escalas[0]?.imo || null,
       consignatari: escalas[0]?.consignatari || null,
       armador: escalas[0]?.armador || null,
     },
@@ -625,62 +671,79 @@ async function computeFacturation(client, from, to) {
   };
 }
 
-app.get('/api/v1/facturation/portcalls', async (req, res) => {
-  const client = findClient(req.query.clientId);
-  if (!client) return res.status(404).json({ success: false, message: 'Navire (client) introuvable' });
+const vesselParam = (req) => req.query.vessel || (findClient(req.query.clientId)?.name);
+
+// Recherche intelligente de navires (liste maîtresse Portic, par nom)
+app.get('/api/v1/facturation/vessels', async (req, res) => {
   try {
-    const data = await computeFacturation(client, req.query.from, req.query.to);
+    const results = await portic.searchVessels(req.query.q, 40);
+    res.json({ success: true, results });
+  } catch (e) {
+    res.status(502).json({ success: false, message: 'Portic injoignable : ' + e.message });
+  }
+});
+
+app.get('/api/v1/facturation/portcalls', async (req, res) => {
+  const vessel = vesselParam(req);
+  if (!vessel) return res.status(400).json({ success: false, message: 'Paramètre vessel requis' });
+  try {
+    const data = await computeFacturation(vessel, req.query.from, req.query.to);
     res.json({ success: true, ...data });
   } catch (e) {
     res.status(502).json({ success: false, message: 'Portic injoignable : ' + e.message });
   }
 });
 
+// Rattacher (ou détacher) une prestation hors escale à un groupe
+app.post('/api/v1/facturation/attach', (req, res) => {
+  const { serviceId, vessel, portCall, detach } = req.body;
+  const s = services.find((x) => x.id === serviceId);
+  if (!s) return res.status(404).json({ success: false, message: 'Prestation introuvable' });
+  if (detach) {
+    s.groupId = null;
+    return res.json({ success: true, groupId: null });
+  }
+  if (!vessel || !portCall?.eta) return res.status(400).json({ success: false, message: 'vessel et portCall.eta requis' });
+  const gid = materializeGroupId(vessel, portCall);
+  s.groupId = gid;
+  res.json({ success: true, groupId: gid });
+});
+
 app.get('/api/v1/facturation/export', async (req, res) => {
-  const client = findClient(req.query.clientId);
-  if (!client) return res.status(404).json({ success: false, message: 'Navire introuvable' });
+  const vessel = vesselParam(req);
+  if (!vessel) return res.status(400).json({ success: false, message: 'Paramètre vessel requis' });
   try {
-    const { vessel, groups } = await computeFacturation(client, req.query.from, req.query.to);
+    const { vessel: v, groups } = await computeFacturation(vessel, req.query.from, req.query.to);
     const billable = groups.filter((g) => g.services.length > 0);
 
     const aoa = [];
     aoa.push(['FACTURATION — Prestations par escale']);
-    aoa.push(['Navire', vessel.name, 'IMO', vessel.imo || '']);
-    aoa.push(['Consignataire', vessel.consignatari || '', 'Armateur', vessel.armador || '']);
-    aoa.push(['Période', `${req.query.from || '—'} → ${req.query.to || '—'}`]);
+    aoa.push(['Navire', v.name, 'Consignataire', v.consignatari || '']);
+    aoa.push(['Armateur', v.armador || '', 'Période', `${req.query.from || '—'} → ${req.query.to || '—'}`]);
     aoa.push([]);
 
     let grandTotal = 0;
     for (const g of billable) {
       const pc = g.portCall;
-      aoa.push([`ESCALE : ${fmtDate(pc.eta)} ${fmtTime(pc.eta)} → ${fmtDate(pc.etd)} ${fmtTime(pc.etd)}`, '', `Muelle ${pc.muelle || '-'}`, pc.tipo || '']);
+      aoa.push([`GROUPE ${g.groupId}`, `Escale : ${fmtDate(pc.eta)} ${fmtTime(pc.eta)} → ${fmtDate(pc.etd)} ${fmtTime(pc.etd)}`, `Muelle ${pc.muelle || '-'}`, pc.tipo || '']);
       aoa.push(['N° Service', 'Date', 'Heure', 'Chauffeur', 'Prestation', 'Départ', 'Destination', 'Statut']);
       for (const s of g.services) {
-        aoa.push([
-          s.serviceCode,
-          fmtDate(s.startTime),
-          fmtTime(s.startTime),
-          `${s.driverCode} ${s.driverName}`.trim(),
-          s.title || '',
-          s.pickup || '',
-          s.dropoff || '',
-          s.status,
-        ]);
+        aoa.push([s.serviceCode, fmtDate(s.startTime), fmtTime(s.startTime), `${s.driverCode} ${s.driverName}`.trim(), s.title || '', s.pickup || '', s.dropoff || '', s.status]);
         grandTotal++;
       }
-      aoa.push(['', '', '', '', '', '', 'Sous-total prestations', g.services.length]);
+      aoa.push(['', '', '', '', '', '', 'Sous-total', g.services.length]);
       aoa.push([]);
     }
     aoa.push(['', '', '', '', '', '', 'TOTAL PRESTATIONS', grandTotal]);
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 8 }, { wch: 22 }, { wch: 24 }, { wch: 26 }, { wch: 26 }, { wch: 12 }];
+    ws['!cols'] = [{ wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 22 }, { wch: 24 }, { wch: 26 }, { wch: 26 }, { wch: 12 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Facturation');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res
       .setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-      .setHeader('Content-Disposition', `attachment; filename="facturation_${client.name.replace(/\s+/g, '_')}_${Date.now()}.xlsx"`)
+      .setHeader('Content-Disposition', `attachment; filename="facturation_${String(vessel).replace(/\s+/g, '_')}_${Date.now()}.xlsx"`)
       .send(buf);
   } catch (e) {
     res.status(502).json({ success: false, message: 'Portic injoignable : ' + e.message });
@@ -948,13 +1011,40 @@ app.put('/api/v1/roster/entry', (req, res) => {
 // ─────────────── 404 ───────────────
 app.use((req, res) => res.status(404).json({ success: false, message: 'Route non trouvée (mock)' }));
 
+// Aligne les prestations démo GNV SEALAND sur les escales réelles actuelles de Portic
+// (les données Portic sont vivantes ; sans ça, la démo ne tomberait dans aucune fenêtre).
+async function positionDemoServices() {
+  try {
+    const esc = (await portic.fetchEscalas('GNV SEALAND', null))
+      .filter((e) => e.eta && e.etd)
+      .sort((a, b) => a.eta - b.eta);
+    if (esc.length < 2) return;
+    const [w0, w1] = esc;
+    const set = (id, base, offMin, durMin) => {
+      const s = services.find((x) => x.id === id);
+      if (!s) return;
+      const st = new Date(base.getTime() + offMin * 60000);
+      s.startTime = st.toISOString();
+      s.endTime = new Date(st.getTime() + durMin * 60000).toISOString();
+    };
+    set('s8', w0.eta, 15, 60); // dans l'escale 1
+    set('s9', w0.eta, 45, 45); // dans l'escale 1
+    set('s10', w1.eta, 20, 60); // dans l'escale 2
+    set('s11', w0.eta, -180, 60); // hors escale : 3h avant l'arrivée (équipage à l'aéroport)
+    console.log(`📌 Démo GNV SEALAND alignée sur Portic (escales ${w0.etaStr} & ${w1.etaStr})`);
+  } catch (e) {
+    console.log('ℹ️  Alignement démo Portic ignoré :', e.message);
+  }
+}
+
 app.listen(PORT, () => {
   console.log('╔════════════════════════════════════════════════════╗');
-  console.log('║   Serveur API FACTICE — Planning Transport         ║');
+  console.log('║   Serveur API FACTICE — Sermaco Management         ║');
   console.log('╠════════════════════════════════════════════════════╣');
   console.log(`║   http://localhost:${PORT}                            ║`);
   console.log('║   Données en mémoire (réinitialisées au redémarrage)║');
   console.log('║   Dispatch : OP-001 / 1234                         ║');
   console.log('║   Chauffeur: CH-001 / 0000                         ║');
   console.log('╚════════════════════════════════════════════════════╝');
+  positionDemoServices();
 });

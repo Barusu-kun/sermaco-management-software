@@ -91,4 +91,58 @@ async function fetchEscalas(name, imo) {
   return data;
 }
 
-module.exports = { fetchEscalas, parseMadrid };
+// Décodage minimal des entités HTML présentes dans la liste des navires
+function decodeEntities(s) {
+  return s
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&uacute;/g, 'ú')
+    .replace(/&aacute;/g, 'á')
+    .replace(/&eacute;/g, 'é')
+    .replace(/&iacute;/g, 'í')
+    .replace(/&oacute;/g, 'ó')
+    .replace(/&ntilde;/g, 'ñ')
+    .replace(/&quot;/g, '"');
+}
+
+let vesselCache = null; // { ts, names }
+const VESSELS_TTL = 60 * 60 * 1000; // 1h
+
+/**
+ * Liste maîtresse des navires connus de Portic (noms uniquement).
+ * Parse le <select name="buque"> de la page escalas.do.
+ */
+async function fetchVessels() {
+  if (vesselCache && Date.now() - vesselCache.ts < VESSELS_TTL) return vesselCache.names;
+  const r = await fetch(`${BASE}/escalas.do`, { redirect: 'manual' });
+  const html = Buffer.from(await r.arrayBuffer()).toString('latin1');
+  const sel = html.match(/<select name="buque"[^>]*>([\s\S]*?)<\/select>/i);
+  const names = [];
+  if (sel) {
+    for (const m of sel[1].matchAll(/<option value="[^"]*">([^<]*)<\/option>/g)) {
+      const name = decodeEntities(m[1].trim());
+      if (name && !/^seleccione/i.test(name)) names.push(name);
+    }
+  }
+  const unique = [...new Set(names)].sort((a, b) => a.localeCompare(b));
+  vesselCache = { ts: Date.now(), names: unique };
+  return unique;
+}
+
+/** Recherche intelligente : renvoie les noms contenant la requête (max `limit`). */
+async function searchVessels(query, limit = 40) {
+  const q = String(query || '').trim().toUpperCase();
+  if (q.length < 2) return [];
+  const names = await fetchVessels();
+  const starts = [];
+  const contains = [];
+  for (const n of names) {
+    const up = n.toUpperCase();
+    if (up.startsWith(q)) starts.push(n);
+    else if (up.includes(q)) contains.push(n);
+    if (starts.length >= limit) break;
+  }
+  return [...starts, ...contains].slice(0, limit);
+}
+
+module.exports = { fetchEscalas, fetchVessels, searchVessels, parseMadrid };

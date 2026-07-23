@@ -135,15 +135,31 @@ export const useDriverStats = (period) =>
   });
 
 /* ─────────────── Facturation (escales Portic) ─────────────── */
+export const useVesselSearch = (q) =>
+  useQuery({
+    queryKey: ['vessels', q],
+    queryFn: async () => (await api.get('/facturation/vessels', { params: { q } })).data.results,
+    enabled: (q?.trim().length || 0) >= 2,
+    staleTime: 5 * 60 * 1000,
+  });
+
 export const usePortCalls = (query) =>
   useQuery({
     queryKey: ['portcalls', query],
     queryFn: async () =>
       (await api.get('/facturation/portcalls', { params: query })).data,
-    enabled: !!query?.clientId,
+    enabled: !!query?.vessel,
     retry: false,
-    staleTime: 60 * 1000,
+    staleTime: 30 * 1000,
   });
+
+export const useAttachService = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload) => (await api.post('/facturation/attach', payload)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['portcalls'] }),
+  });
+};
 
 /* ─────────────── Roster / Jours de travail ─────────────── */
 export const useRoster = (month) =>
